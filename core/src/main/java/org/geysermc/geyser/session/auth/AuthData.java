@@ -27,5 +27,5 @@ package org.geysermc.geyser.session.auth;
 
 import java.util.UUID;
 
-public record AuthData(String name) {
+public record AuthData(String name, UUID uuid, String xuid) {
 }
