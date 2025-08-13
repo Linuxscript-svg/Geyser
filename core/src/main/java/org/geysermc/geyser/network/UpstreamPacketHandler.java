@@ -26,10 +26,10 @@
 package org.geysermc.geyser.network;
 
 import io.netty.buffer.Unpooled;
+import org.cloudburstmc.math.vector.Vector2f;
 import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
 import org.cloudburstmc.protocol.bedrock.codec.compat.BedrockCompat;
-import org.cloudburstmc.protocol.bedrock.codec.v622.Bedrock_v622;
 import org.cloudburstmc.protocol.bedrock.data.ExperimentData;
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm;
 import org.cloudburstmc.protocol.bedrock.data.ResourcePackType;
@@ -39,9 +39,9 @@ import org.cloudburstmc.protocol.bedrock.netty.codec.compression.ZlibCompression
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
 import org.cloudburstmc.protocol.bedrock.packet.LoginPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ModalFormResponsePacket;
-import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket;
 import org.cloudburstmc.protocol.bedrock.packet.NetworkSettingsPacket;
 import org.cloudburstmc.protocol.bedrock.packet.PlayStatusPacket;
+import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket;
 import org.cloudburstmc.protocol.bedrock.packet.RequestNetworkSettingsPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ResourcePackChunkDataPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ResourcePackChunkRequestPacket;
@@ -52,6 +52,7 @@ import org.cloudburstmc.protocol.bedrock.packet.ResourcePacksInfoPacket;
 import org.cloudburstmc.protocol.bedrock.packet.SetTitlePacket;
 import org.cloudburstmc.protocol.common.PacketSignal;
 import org.cloudburstmc.protocol.common.util.Zlib;
+import org.geysermc.api.util.BedrockPlatform;
 import org.geysermc.geyser.Constants;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.api.event.bedrock.SessionInitializeEvent;
@@ -59,31 +60,45 @@ import org.geysermc.geyser.api.network.AuthType;
 import org.geysermc.geyser.api.pack.PackCodec;
 import org.geysermc.geyser.api.pack.ResourcePack;
 import org.geysermc.geyser.api.pack.ResourcePackManifest;
+import org.geysermc.geyser.api.pack.option.ResourcePackOption;
 import org.geysermc.geyser.event.type.SessionLoadResourcePacksEventImpl;
 import org.geysermc.geyser.pack.GeyserResourcePack;
+import org.geysermc.geyser.pack.ResourcePackHolder;
+import org.geysermc.geyser.pack.url.GeyserUrlPackCodec;
 import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.Registries;
+import org.geysermc.geyser.registry.loader.ResourcePackLoader;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.PendingMicrosoftAuthentication;
+import org.geysermc.geyser.session.auth.AuthData;
 import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.util.LoginEncryptionUtils;
 import org.geysermc.geyser.util.MathUtils;
 import org.geysermc.geyser.util.VersionCheckUtils;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.OptionalInt;
+import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 
 public class UpstreamPacketHandler extends LoggingPacketHandler {
 
     private boolean networkSettingsRequested = false;
-    private final Deque<String> packsToSent = new ArrayDeque<>();
+    private boolean receivedLoginPacket = false;
+    private boolean finishedResourcePackSending = false;
+    private final Deque<String> packsToSend = new ArrayDeque<>();
     private final CompressionStrategy compressionStrategy;
-
+    // Avoid overloading consoles when downloading larger resource packs
+    private static final int PACKET_SEND_DELAY = 4 * 50;
+    private final Queue<ResourcePackChunkRequestPacket> chunkRequestQueue = new ConcurrentLinkedQueue<>();
+    private boolean currentlySendingChunks = false;
     private SessionLoadResourcePacksEventImpl resourcePackLoadEvent;
 
     public UpstreamPacketHandler(GeyserImpl geyser, GeyserSession session) {
@@ -95,7 +110,7 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
     }
 
     private PacketSignal translateAndDefault(BedrockPacket packet) {
-        Registries.BEDROCK_PACKET_TRANSLATORS.translate(packet.getClass(), packet, session);
+        Registries.BEDROCK_PACKET_TRANSLATORS.translate(packet.getClass(), packet, session, false);
         return PacketSignal.HANDLED; // PacketSignal.UNHANDLED will log a WARN publicly
     }
 
@@ -107,8 +122,9 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
     private boolean setCorrectCodec(int protocolVersion) {
         BedrockCodec packetCodec = GameProtocol.getBedrockCodec(protocolVersion);
         if (packetCodec == null) {
+            // None of our Bedrock codecs support this client version, so we can simply compare it to our default protocol.
             String supportedVersions = GameProtocol.getAllSupportedBedrockVersions();
-            if (protocolVersion > GameProtocol.DEFAULT_BEDROCK_CODEC.getProtocolVersion()) {
+            if (protocolVersion > GameProtocol.DEFAULT_BEDROCK_PROTOCOL) {
                 // Too early to determine session locale
                 String disconnectMessage = GeyserLocale.getLocaleStringLog("geyser.network.outdated.server", supportedVersions);
                 // If the latest release matches this version, then let the user know.
@@ -119,11 +135,12 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
                 }
                 session.disconnect(disconnectMessage);
                 return false;
-            } else if (protocolVersion < GameProtocol.DEFAULT_BEDROCK_CODEC.getProtocolVersion()) {
-                if (protocolVersion < Bedrock_v622.CODEC.getProtocolVersion()) {
-                    // https://github.com/GeyserMC/Geyser/issues/4378
-                    session.getUpstream().getSession().setCodec(BedrockCompat.CODEC_LEGACY);
-                }
+            } else if (protocolVersion < GameProtocol.DEFAULT_BEDROCK_PROTOCOL) {
+                // A note on the following line: various older client versions have different forms of DisconnectPacket.
+                // Using only the latest BedrockCompat for such clients leads to inaccurate disconnect messages: https://github.com/GeyserMC/Geyser/issues/4378
+                // This updates the BedrockCompat protocol if necessary:
+                session.getUpstream().getSession().setCodec(BedrockCompat.disconnectCompat(protocolVersion));
+
                 session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.outdated.client", supportedVersions));
                 return false;
             } else {
@@ -132,20 +149,58 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         }
 
         session.getUpstream().getSession().setCodec(packetCodec);
-        // FIXME temporary until 1.20.80 is dropped
-        session.getPlayerEntity().resetAir();
         return true;
     }
 
     @Override
     public void onDisconnect(String reason) {
-        // Use our own disconnect messages for these reasons
+        // 安全获取玩家标识
+        String playerIdentifier = getSafePlayerIdentifier();
+        
+        // 使用我们自己的断开连接消息
         if (BedrockDisconnectReasons.CLOSED.equals(reason)) {
             this.session.getUpstream().getSession().setDisconnectReason(GeyserLocale.getLocaleStringLog("geyser.network.disconnect.closed_by_remote_peer"));
         } else if (BedrockDisconnectReasons.TIMEOUT.equals(reason)) {
             this.session.getUpstream().getSession().setDisconnectReason(GeyserLocale.getLocaleStringLog("geyser.network.disconnect.timed_out"));
         }
+        
+        // 记录断开信息
+        geyser.getLogger().info(GeyserLocale.getLocaleStringLog(
+            "geyser.network.disconnect", 
+            playerIdentifier, 
+            reason
+        ));
+        
         this.session.disconnect(this.session.getUpstream().getSession().getDisconnectReason());
+    }
+    
+    private String getSafePlayerIdentifier() {
+        if (session == null) {
+            return "未初始化的会话";
+        }
+        
+        // 优先使用 XUID/DID
+        if (session.xuid() != null && !session.xuid().isEmpty()) {
+            return "XUID:" + session.xuid();
+        }
+        
+        // 然后尝试使用认证数据
+        if (session.getAuthData() != null) {
+            return session.getAuthData().name();
+        }
+        
+        // 然后使用基岩版用户名
+        if (session.bedrockUsername() != null && !session.bedrockUsername().isEmpty()) {
+            return session.bedrockUsername();
+        }
+        
+        // 最后使用IP地址
+        if (session.getSocketAddress() instanceof InetSocketAddress) {
+            InetSocketAddress address = (InetSocketAddress) session.getSocketAddress();
+            return address.getAddress().getHostAddress();
+        }
+        
+        return "未知玩家";
     }
 
     @Override
@@ -180,6 +235,18 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
             return PacketSignal.HANDLED;
         }
 
+        if (receivedLoginPacket) {
+            session.disconnect("Received duplicate login packet!");
+            session.forciblyCloseUpstream();
+            return PacketSignal.HANDLED;
+        }
+        receivedLoginPacket = true;
+
+        if (geyser.getSessionManager().reachedMaxConnectionsPerAddress(session)) {
+            session.disconnect("Too many connections are originating from this location!");
+            return PacketSignal.HANDLED;
+        }
+
         // Set the block translation based off of version
         session.setBlockMappings(BlockRegistries.BLOCKS.forVersion(loginPacket.getProtocolVersion()));
         session.setItemMappings(Registries.ITEMS.forVersion(loginPacket.getProtocolVersion()));
@@ -191,6 +258,18 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
             return PacketSignal.HANDLED;
         }
 
+        if (geyser.getSessionManager().isXuidAlreadyPending(session.xuid()) || geyser.getSessionManager().sessionByXuid(session.xuid()) != null) {
+            // 安全获取玩家标识
+            String playerIdentifier = session.bedrockUsername() != null ? 
+                session.bedrockUsername() : 
+                (session.xuid() != null ? "XUID:" + session.xuid() : "未知玩家");
+            
+            session.disconnect(GeyserLocale.getLocaleStringLog("geyser.auth.already_loggedin", playerIdentifier));
+            return PacketSignal.HANDLED;
+        }
+
+        geyser.getSessionManager().addPendingSession(session);
+
         // Fire SessionInitializeEvent here as we now know the client data
         geyser.eventBus().fire(new SessionInitializeEvent(session));
 
@@ -198,20 +277,20 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         playStatus.setStatus(PlayStatusPacket.Status.LOGIN_SUCCESS);
         session.sendUpstreamPacket(playStatus);
 
-        geyser.getSessionManager().addPendingSession(session);
-
-        this.resourcePackLoadEvent = new SessionLoadResourcePacksEventImpl(session, new HashMap<>(Registries.RESOURCE_PACKS.get()));
-        this.geyser.eventBus().fire(this.resourcePackLoadEvent);
+        this.resourcePackLoadEvent = new SessionLoadResourcePacksEventImpl(session);
+        this.geyser.eventBus().fireEventElseKick(this.resourcePackLoadEvent, session);
+        if (session.isClosed()) {
+            // Can happen if an error occurs in the resource pack event; that'll disconnect the player
+            return PacketSignal.HANDLED;
+        }
 
         ResourcePacksInfoPacket resourcePacksInfo = new ResourcePacksInfoPacket();
-        for (ResourcePack pack : this.resourcePackLoadEvent.resourcePacks()) {
-            PackCodec codec = pack.codec();
-            ResourcePackManifest.Header header = pack.manifest().header();
-            resourcePacksInfo.getResourcePackInfos().add(new ResourcePacksInfoPacket.Entry(
-                    header.uuid().toString(), header.version().toString(), codec.size(), pack.contentKey(),
-                    "", header.uuid().toString(), false, false));
-        }
+        resourcePacksInfo.getResourcePackInfos().addAll(this.resourcePackLoadEvent.infoPacketEntries());
+        resourcePacksInfo.setVibrantVisualsForceDisabled(!session.isAllowVibrantVisuals());
+
         resourcePacksInfo.setForcedToAccept(GeyserImpl.getInstance().getConfig().isForceResourcePacks());
+        resourcePacksInfo.setWorldTemplateId(UUID.randomUUID());
+        resourcePacksInfo.setWorldTemplateVersion("*");
         session.sendUpstreamPacket(resourcePacksInfo);
 
         GeyserLocale.loadGeyserLocale(session.locale());
@@ -220,47 +299,80 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
 
     @Override
     public PacketSignal handle(ResourcePackClientResponsePacket packet) {
+        if (session.getUpstream().isClosed() || session.isClosed()) {
+            return PacketSignal.HANDLED;
+        }
+
+        if (finishedResourcePackSending) {
+            session.disconnect("Illegal duplicate resource pack response packet received!");
+            return PacketSignal.HANDLED;
+        }
+
         switch (packet.getStatus()) {
-            case COMPLETED:
+            case COMPLETED -> {
+                finishedResourcePackSending = true;
+                
+                // 安全获取用户名（处理 authData 可能为空的情况）
+                String username;
+                if (session.getAuthData() != null) {
+                    username = session.getAuthData().name();
+                } else {
+                    // 使用 XUID/DID 作为备选标识
+                    username = session.xuid() != null ? "XUID:" + session.xuid() : session.bedrockUsername();
+                    geyser.getLogger().warning("认证数据为空，使用备选标识: " + username);
+                    
+                    // 创建临时认证数据（如果需要）
+                    if (session.getAuthData() == null) {
+                        session.setAuthData(new AuthData(
+                            username,
+                            UUID.nameUUIDFromBytes(username.getBytes()),
+                            session.xuid()
+                        ));
+                    }
+                }
+
                 if (geyser.getConfig().getRemote().authType() != AuthType.ONLINE) {
-                    session.authenticate(session.getAuthData().name());
-                } else if (!couldLoginUserByName(session.getAuthData().name())) {
-                    // We must spawn the white world
+                    session.authenticate(username);
+                } else if (session.getAuthData() != null && !couldLoginUserByName(username)) {
+                    // 确保 authData 不为空再继续
                     session.connect();
                 }
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.connect", session.getAuthData().name()));
-                break;
-
-            case SEND_PACKS:
-                packsToSent.addAll(packet.getPackIds());
-                sendPackDataInfo(packsToSent.pop());
-                break;
-
-            case HAVE_ALL_PACKS:
+                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.connect", username));
+            }
+            case SEND_PACKS -> {
+                if (packet.getPackIds().isEmpty()) {
+                    GeyserImpl.getInstance().getLogger().warning("Received empty pack ids in resource pack response packet!");
+                    session.disconnect("Invalid resource pack response packet received!");
+                    chunkRequestQueue.clear();
+                    return PacketSignal.HANDLED;
+                }
+                packsToSend.addAll(packet.getPackIds());
+                sendPackDataInfo(packsToSend.pop());
+            }
+            case HAVE_ALL_PACKS -> {
                 ResourcePackStackPacket stackPacket = new ResourcePackStackPacket();
                 stackPacket.setExperimentsPreviouslyToggled(false);
                 stackPacket.setForcedToAccept(false); // Leaving this as false allows the player to choose to download or not
                 stackPacket.setGameVersion(session.getClientData().getGameVersion());
-
-                for (ResourcePack pack : this.resourcePackLoadEvent.resourcePacks()) {
-                    ResourcePackManifest.Header header = pack.manifest().header();
-                    stackPacket.getResourcePacks().add(new ResourcePackStackPacket.Entry(header.uuid().toString(), header.version().toString(), ""));
+                stackPacket.getResourcePacks().addAll(this.resourcePackLoadEvent.orderedPacks());
+                // Allows Vibrant Visuals to be toggled in the settings
+                if (session.isAllowVibrantVisuals() && !GameProtocol.is1_21_90orHigher(session)) {
+                    stackPacket.getExperiments().add(new ExperimentData("experimental_graphics", true));
                 }
 
-                if (GeyserImpl.getInstance().getConfig().isAddNonBedrockItems()) {
-                    // Allow custom items to work
-                    stackPacket.getExperiments().add(new ExperimentData("data_driven_items", true));
+                if (GameProtocol.is1_21_80(session)) {
+                    // Support happy ghasts in .80
+                    stackPacket.getExperiments().add(new ExperimentData("y_2025_drop_2", true));
+                    // Enables the locator bar for 1.21.80 clients
+                    stackPacket.getExperiments().add(new ExperimentData("locator_bar", true));
                 }
-
-                // Required for experimental 1.21 features
-                stackPacket.getExperiments().add(new ExperimentData("updateAnnouncedLive2023", true));
 
                 session.sendUpstreamPacket(stackPacket);
-                break;
-
-            default:
+            }
+            default -> {
+                GeyserImpl.getInstance().getLogger().debug("received unknown status packet: " + packet);
                 session.disconnect("disconnectionScreen.resourcePack");
-                break;
+            }
         }
 
         return PacketSignal.HANDLED;
@@ -268,11 +380,20 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
 
     @Override
     public PacketSignal handle(ModalFormResponsePacket packet) {
+        if (session.getUpstream().isClosed() || session.isClosed()) {
+            return PacketSignal.HANDLED;
+        }
         session.executeInEventLoop(() -> session.getFormCache().handleResponse(packet));
         return PacketSignal.HANDLED;
     }
 
     private boolean couldLoginUserByName(String bedrockUsername) {
+        // 处理 authData 可能为空的情况
+        if (session.getAuthData() == null) {
+            geyser.getLogger().warning("尝试认证时 authData 为空: " + bedrockUsername);
+            return false;
+        }
+        
         if (geyser.getConfig().getSavedUserLogins().contains(bedrockUsername)) {
             String authChain = geyser.authChainFor(bedrockUsername);
             if (authChain != null) {
@@ -290,8 +411,9 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
     }
 
     @Override
-    public PacketSignal handle(MovePlayerPacket packet) {
-        if (session.isLoggingIn()) {
+    public PacketSignal handle(PlayerAuthInputPacket packet) {
+        // This doesn't catch rotation, but for a niche case I don't exactly want to cache rotation...
+        if (!session.isClosed() && session.isLoggingIn() && !packet.getMotion().equals(Vector2f.ZERO)) {
             SetTitlePacket titlePacket = new SetTitlePacket();
             titlePacket.setType(SetTitlePacket.Type.ACTIONBAR);
             titlePacket.setText(GeyserLocale.getPlayerLocaleString("geyser.auth.login.wait", session.locale()));
@@ -308,10 +430,63 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
 
     @Override
     public PacketSignal handle(ResourcePackChunkRequestPacket packet) {
-        ResourcePackChunkDataPacket data = new ResourcePackChunkDataPacket();
-        ResourcePack pack = this.resourcePackLoadEvent.getPacks().get(packet.getPackId().toString());
-        PackCodec codec = pack.codec();
+        if (session.getUpstream().isClosed() || session.isClosed()) {
+            return PacketSignal.HANDLED;
+        }
 
+        // Resolve some console pack downloading issues.
+        // See <https://github.com/PowerNukkitX/PowerNukkitX/pull/1997> for reference
+        chunkRequestQueue.add(packet);
+        if (isConsole()) {
+            if (!currentlySendingChunks) {
+                currentlySendingChunks = true;
+                processNextChunk();
+            }
+        } else {
+            processNextChunk();
+        }
+        return PacketSignal.HANDLED;
+    }
+
+    public void processNextChunk() {
+        ResourcePackChunkRequestPacket packet = chunkRequestQueue.poll();
+        if (packet == null || session.isClosed()) {
+            currentlySendingChunks = false;
+            return;
+        }
+
+        ResourcePackHolder holder = this.resourcePackLoadEvent.getPacks().get(packet.getPackId());
+        if (holder == null) {
+            // 安全获取玩家标识
+            String playerIdentifier = getSafePlayerIdentifier();
+            
+            GeyserImpl.getInstance().getLogger().debug("Client {0} tried to request pack id {1} not sent to it!",
+                playerIdentifier, packet.getPackId());
+            chunkRequestQueue.clear();
+            session.disconnect("disconnectionScreen.resourcePack");
+            return;
+        }
+
+        PackCodec codec = holder.codec();
+        // If a remote pack ends up here, that usually implies that a client was not able to download the pack
+        if (codec instanceof GeyserUrlPackCodec urlPackCodec) {
+            ResourcePackLoader.testRemotePack(session, urlPackCodec, holder);
+            if (!resourcePackLoadEvent.value(holder.uuid(), ResourcePackOption.Type.FALLBACK, true)) {
+                session.disconnect("Unable to provide downloaded resource pack. Contact an administrator!");
+                chunkRequestQueue.clear();
+                return;
+            }
+        } else if (finishedResourcePackSending) {
+            // 安全获取玩家标识
+            String playerIdentifier = getSafePlayerIdentifier();
+            
+            GeyserImpl.getInstance().getLogger().warning("Received resource pack chunk packet after stage completed! " + packet + " from " + playerIdentifier);
+            session.disconnect("Duplicate resource pack packet received!");
+            chunkRequestQueue.clear();
+            return;
+        }
+
+        ResourcePackChunkDataPacket data = new ResourcePackChunkDataPacket();
         data.setChunkIndex(packet.getChunkIndex());
         data.setProgress((long) packet.getChunkIndex() * GeyserResourcePack.CHUNK_SIZE);
         data.setPackVersion(packet.getPackVersion());
@@ -321,29 +496,70 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         long remainingSize = codec.size() - offset;
         byte[] packData = new byte[(int) MathUtils.constrain(remainingSize, 0, GeyserResourcePack.CHUNK_SIZE)];
 
-        try (SeekableByteChannel channel = codec.serialize(pack)) {
+        try (SeekableByteChannel channel = codec.serialize()) {
             channel.position(offset);
             channel.read(ByteBuffer.wrap(packData, 0, packData.length));
         } catch (IOException e) {
+            session.disconnect("disconnectionScreen.resourcePack");
             e.printStackTrace();
         }
 
         data.setData(Unpooled.wrappedBuffer(packData));
 
-        session.sendUpstreamPacket(data);
-
-        // Check if it is the last chunk and send next pack in queue when available.
-        if (remainingSize <= GeyserResourcePack.CHUNK_SIZE && !packsToSent.isEmpty()) {
-            sendPackDataInfo(packsToSent.pop());
+        if (isConsole()) {
+            // Also flushes packets
+            // Avoids bursting slower / delayed clients
+            session.sendUpstreamPacketImmediately(data);
+            GeyserImpl.getInstance().getScheduledThread().schedule(this::processNextChunk, PACKET_SEND_DELAY, TimeUnit.MILLISECONDS);
+        } else {
+            session.sendUpstreamPacket(data);
         }
 
-        return PacketSignal.HANDLED;
+        // Check if it is the last chunk and send next pack in queue when available.
+        if (remainingSize <= GeyserResourcePack.CHUNK_SIZE && !packsToSend.isEmpty()) {
+            sendPackDataInfo(packsToSend.pop());
+        }
     }
 
     private void sendPackDataInfo(String id) {
         ResourcePackDataInfoPacket data = new ResourcePackDataInfoPacket();
         String[] packID = id.split("_");
-        ResourcePack pack = this.resourcePackLoadEvent.getPacks().get(packID[0]);
+
+        if (packID.length < 2) {
+            // 安全获取玩家标识
+            String playerIdentifier = getSafePlayerIdentifier();
+            
+            GeyserImpl.getInstance().getLogger().debug("Client {0} tried to request invalid pack id {1}!",
+                playerIdentifier, packID);
+            session.disconnect("disconnectionScreen.resourcePack");
+            return;
+        }
+
+        UUID packId;
+        try {
+            packId = UUID.fromString(packID[0]);
+        } catch (IllegalArgumentException e) {
+            // 安全获取玩家标识
+            String playerIdentifier = getSafePlayerIdentifier();
+            
+            GeyserImpl.getInstance().getLogger().debug("Client {0} tried to request pack with an invalid id {1})",
+                playerIdentifier, id);
+            session.disconnect("disconnectionScreen.resourcePack");
+            return;
+        }
+
+        ResourcePackHolder holder = this.resourcePackLoadEvent.getPacks().get(packId);
+        if (holder == null) {
+            // 安全获取玩家标识
+            String playerIdentifier = getSafePlayerIdentifier();
+            
+            GeyserImpl.getInstance().getLogger().debug("Client {0} tried to request pack id {1} not sent to it!",
+                playerIdentifier, id);
+            session.disconnect("disconnectionScreen.resourcePack");
+            return;
+        }
+
+        ResourcePack pack = holder.pack();
         PackCodec codec = pack.codec();
         ResourcePackManifest.Header header = pack.manifest().header();
 
@@ -358,5 +574,10 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         data.setType(ResourcePackType.RESOURCES);
 
         session.sendUpstreamPacket(data);
+    }
+
+    private boolean isConsole() {
+        BedrockPlatform platform = session.platform();
+        return platform == BedrockPlatform.PS4 || platform == BedrockPlatform.XBOX || platform == BedrockPlatform.NX;
     }
 }
