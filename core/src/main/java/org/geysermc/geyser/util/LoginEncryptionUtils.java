@@ -69,14 +69,19 @@ public class LoginEncryptionUtils {
 
             geyser.getLogger().debug(String.format("Is player data signed? %s", result.signed()));
 
-            if (!result.signed() && !session.getGeyser().getConfig().isEnableProxyConnections()) {
-                session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
-                return;
-            }
+        // 注释掉原有的 Xbox 账户验证逻辑
+        /*
+        if (!result.signed() && !session.getGeyser().getConfig().isEnableProxyConnections()) {
+            session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
+            return;
+        }
+        */
 
-            IdentityData extraData = result.identityClaims().extraData;
-            session.setAuthenticationData(new AuthData(extraData.displayName, extraData.identity, extraData.xuid));
-            session.setCertChainData(certChainData);
+        // 直接使用证书链中的身份数据（跳过验证）
+        IdentityData extraData = result.identityClaims().extraData;
+        session.setAuthenticationData(new AuthData(extraData.displayName, extraData.identity, extraData.xuid));
+        session.setCertChainData(certChainData);
+
 
             PublicKey identityPublicKey = result.identityClaims().parsedIdentityPublicKey();
 
