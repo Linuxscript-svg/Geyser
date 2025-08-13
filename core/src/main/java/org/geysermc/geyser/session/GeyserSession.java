@@ -792,13 +792,9 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                     new GameProfile(mcProfile.getId(), mcProfile.getName()),
                     mcToken.getAccessToken()
             );
-        // 安全获取用户名
-        String username = (authData != null && authData.name() != null) ? 
-            authData.name() : safePlayerIdentifier();
-        
-        geyser.saveAuthChain(username, GSON.toJson(step.toJson(response)));
-        return Boolean.TRUE;
-    }).whenComplete((successful, ex) -> {
+            geyser.saveAuthChain(bedrockUsername(), GSON.toJson(step.toJson(response)));
+            return Boolean.TRUE;
+        }).whenComplete((successful, ex) -> {
             if (this.closed) {
                 return;
             }
@@ -860,11 +856,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         if (closed) {
             return false;
         }
-        
-    // 安全获取 XUID
-    String xuid = (authData != null && authData.xuid() != null) ? 
-        authData.xuid() : "unknown";
-    
         task.cleanup(); // player is online -> remove pending authentication immediately
         return task.getAuthentication().handle((result, ex) -> {
              if (ex != null) {
@@ -1029,12 +1020,12 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 loggedIn = true;
 
                 if (downstream instanceof LocalSession) {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
-                        bedrockUsername(), protocol.getProfile().getName())); // 使用 bedrockUsername()
-            } else {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
-                        bedrockUsername(), protocol.getProfile().getName(), remoteServer.address())); // 使用 bedrockUsername()
-            }
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
+                            bedrockUsername(), protocol.getProfile().getName()));
+                } else {
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
+                            bedrockUsername(), protocol.getProfile().getName(), remoteServer.address()));
+                }
 
                 UUID uuid = protocol.getProfile().getId();
                 if (uuid == null) {
@@ -1091,18 +1082,21 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 } else {
                     disconnectMessage = MessageTranslator.convertMessage(event.getReason());
                 }
-if (downstream instanceof LocalSession) {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
-                        bedrockUsername(), protocol.getProfile().getName())); // 使用 bedrockUsername()
-            } else {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
-                        bedrockUsername(), protocol.getProfile().getName(), remoteServer.address())); // 使用 bedrockUsername()
-            }
+                
+                String bedrockName = bedrockUsername();
+                if (downstream instanceof LocalSession) {
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
+                            bedrockName, bedrockName));
+                } else {
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
+                            bedrockName, bedrockName, remoteServer.address()));
+                }
+                
                 if (cause != null) {
                     if (cause.getMessage() != null) {
-                        GeyserImpl.getInstance().getLogger().error(cause.getMessage());
+                        geyser.getLogger().error("[" + bedrockName + "] " + cause.getMessage());
                     } else {
-                        GeyserImpl.getInstance().getLogger().error("An exception occurred: ", cause);
+                        geyser.getLogger().error("[" + bedrockName + "] An exception occurred", cause);
                     }
                     if (geyser.getConfig().isDebugMode()) {
                         cause.printStackTrace();
@@ -1140,17 +1134,15 @@ if (downstream instanceof LocalSession) {
         downstream.connect(false, loginEvent.transferring());
     }
 
-public void disconnect(String reason) {
-    if (!closed) {
-        loggedIn = false;
+    public void disconnect(String reason) {
+        if (!closed) {
+            loggedIn = false;
 
-        // 使用安全的玩家标识
-        String playerIdentifier = safePlayerIdentifier();
-        
-        SessionDisconnectEvent disconnectEvent = new SessionDisconnectEvent(this, reason);
-        if (authData != null && clientData != null) {
-            geyser.getEventBus().fire(disconnectEvent);
-        }
+            SessionDisconnectEvent disconnectEvent = new SessionDisconnectEvent(this, reason);
+            if (authData != null && clientData != null) { // can occur if player disconnects before Bedrock auth finishes
+                // Fire SessionDisconnectEvent
+                geyser.getEventBus().fire(disconnectEvent);
+            }
 
             // Disconnect downstream if necessary
             if (downstream != null) {
@@ -1172,15 +1164,13 @@ public void disconnect(String reason) {
 
             // Remove from session manager
             geyser.getSessionManager().removeSession(this);
-         
-        // 修改点：安全访问 XUID
-        if (authData != null && authData.xuid() != null) {
-            PendingMicrosoftAuthentication.AuthenticationTask task = geyser.getPendingMicrosoftAuthentication().getTask(authData.xuid());
-            if (task != null) {
-                task.resetRunningFlow();
+            if (authData != null) {
+                PendingMicrosoftAuthentication.AuthenticationTask task = geyser.getPendingMicrosoftAuthentication().getTask(authData.xuid());
+                if (task != null) {
+                    task.resetRunningFlow();
+                }
             }
         }
-    }
 
         if (tickThread != null) {
             tickThread.cancel(false);
@@ -1189,12 +1179,6 @@ public void disconnect(String reason) {
         erosionHandler.close();
 
         closed = true;
-        
-        
-    // 日志使用安全标识
-    String address = geyser.getConfig().isLogPlayerIpAddresses() ? 
-        upstream.getAddress().getAddress().toString() : "<IP address withheld>";
-    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.disconnect", playerIdentifier, reason));
     }
 
     /**
@@ -1459,11 +1443,10 @@ public void disconnect(String reason) {
         sendDownstreamGamePacket(swapHandsPacket);
     }
 
-   @Override
-public String name() {
-    // 优先使用 javaUsername()，它内部已处理空值
-    return playerEntity != null ? javaUsername() : bedrockUsername();
-}
+    @Override
+    public String name() {
+        return javaUsername();
+    }
 
     @Override
     public void sendMessage(@NonNull String message) {
@@ -1698,6 +1681,7 @@ public String name() {
     /**
      * Send a packet immediately to the player.
      *
+     * @极简壁纸
      * @param packet the bedrock packet from the NukkitX protocol lib
      */
     public void sendUpstreamPacketImmediately(BedrockPacket packet) {
@@ -1714,7 +1698,7 @@ public String name() {
     }
 
     /**
-     * Send a packet to the remote server if in the login state.
+     * Send极简壁纸 a packet to the remote server if in the login state.
      *
      * @param packet the java edition packet from MCProtocolLib
      */
@@ -1757,7 +1741,7 @@ public String name() {
             if (channel == null) {
                 // Channel is only null before the connection has initialized
                 geyser.getLogger().warning("Tried to send a packet to the Java server too early!");
-                if (geyser.getConfig().isDebugMode()) {
+                if (geyser.getConfig().isDebug极简壁纸Mode()) {
                     Thread.dumpStack();
                 }
                 return;
@@ -1998,33 +1982,32 @@ public String name() {
         };
     }
 
-   @Override
-public @NonNull String bedrockUsername() {
-    if (authData != null && authData.name() != null) {
-        return authData.name();
+    @Override
+    public @NonNull String bedrockUsername() {
+        if (authData != null && authData.name() != null) {
+            return authData.name();
+        }
+        
+        // Fallback to XUID or client data username
+        if (authData != null && authData.xuid() != null) {
+            return "XUID:" + authData.xuid();
+        }
+        
+        if (clientData != null && clientData.getUsername() != null) {
+            return clientData.getUsername();
+        }
+        
+        // Final fallback
+        return "UnknownPlayer";
     }
-    return safePlayerIdentifier(); // 回退到安全标识
-}
-    // 备选方案：使用 XUID 或客户端数据中的用户名
-    if (authData != null && authData.xuid() != null) {
-        return "XUID:" + authData.xuid();
-    }
-    
-    if (clientData != null && clientData.getUsername() != null) {
-        return clientData.getUsername();
-    }
-    
-    // 最后备选
-    return "UnknownPlayer";
-}
 
-   @Override
-public @MonotonicNonNull String javaUsername() {
-    if (playerEntity != null && playerEntity.getUsername() != null) {
-        return playerEntity.getUsername();
+    @Override
+    public @MonotonicNonNull String javaUsername() {
+        if (playerEntity != null && playerEntity.getUsername() != null) {
+            return playerEntity.getUsername();
+        }
+        return bedrockUsername(); // Safe fallback
     }
-    return bedrockUsername(); // 回退到安全的 bedrockUsername
-}
 
     @Override
     public UUID javaUuid() {
@@ -2033,17 +2016,19 @@ public @MonotonicNonNull String javaUsername() {
 
     @Override
     public @NonNull String xuid() {
-        return authData.xuid();
+        return authData != null ? authData.xuid() : "";
     }
 
     @Override
     public @NonNull String version() {
-        return clientData.getGameVersion();
+        return clientData != null ? clientData.getGameVersion() : "Unknown";
     }
 
     @Override
     public @NonNull BedrockPlatform platform() {
-        return BedrockPlatform.values()[clientData.getDeviceOs().ordinal()]; //todo
+        return clientData != null ? 
+            BedrockPlatform.values()[clientData.getDeviceOs().ordinal()] : 
+            BedrockPlatform.UNKNOWN;
     }
 
     @Override
@@ -2053,12 +2038,16 @@ public @MonotonicNonNull String javaUsername() {
 
     @Override
     public @NonNull UiProfile uiProfile() {
-        return UiProfile.values()[clientData.getUiProfile().ordinal()]; //todo
+        return clientData != null ? 
+            UiProfile.values()[clientData.getUiProfile().ordinal()] : 
+            UiProfile.CLASSIC;
     }
 
     @Override
     public @NonNull InputMode inputMode() {
-        return InputMode.values()[clientData.getCurrentInputMode().ordinal()]; //todo
+        return clientData != null ? 
+            InputMode.values()[clientData.getCurrentInputMode().ordinal()] : 
+            InputMode.UNKNOWN;
     }
 
     @Override
@@ -2121,7 +2110,7 @@ public @MonotonicNonNull String javaUsername() {
     }
 
     @Override
-    public void shakeCamera(float intensity, float duration, @NonNull CameraShake type) {
+    public void shakeCamera(float intensity, float duration, @NonNull Camera极简壁纸Shake type) {
         this.cameraData.shakeCamera(intensity, duration, type);
     }
 
