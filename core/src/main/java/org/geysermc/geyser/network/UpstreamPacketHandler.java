@@ -143,11 +143,13 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
     public void onDisconnect(String reason) {
         String playerName = "未知玩家";
         if (session != null) {
-            // 使用多级备选标识
+            // 使用多级备选标识方案
             if (session.getAuthData() != null && session.getAuthData().name() != null) {
                 playerName = session.getAuthData().name();
             } else if (session.getClientData() != null && session.getClientData().getUsername() != null) {
                 playerName = session.getClientData().getUsername();
+            } else if (session.xuid() != null) {
+                playerName = "XUID:" + session.xuid();
             } else if (session.getSocketAddress() != null) {
                 playerName = "IP:" + session.getSocketAddress().toString();
             }
@@ -232,29 +234,33 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         GeyserLocale.loadGeyserLocale(session.locale());
         return PacketSignal.HANDLED;
     }
-
     @Override
     public PacketSignal handle(ResourcePackClientResponsePacket packet) {
         switch (packet.getStatus()) {
             case COMPLETED:
                 // 修复点1: 安全处理 authData 可能为 null 的情况
                 String username = "未知玩家";
+                String xuid = session.xuid(); // 使用 DID/XUID 作为备选标识
+                
                 if (session.getAuthData() != null) {
                     username = session.getAuthData().name() != null ? 
                              session.getAuthData().name() : 
-                             "XUID:" + session.getAuthData().xuid();
+                             "XUID:" + xuid;
+                } else if (xuid != null) {
+                    username = "XUID:" + xuid;
                 } else if (session.getClientData() != null) {
                     username = session.getClientData().getUsername();
                 }
                 
                 if (geyser.getConfig().getRemote().authType() != AuthType.ONLINE) {
+                    // 使用 XUID 作为离线模式用户名
                     session.authenticate(username);
                 } else if (session.getAuthData() != null && !couldLoginUserByName(username)) {
-                    // 确保 authData 不为空再继续
                     session.connect();
                 }
                 geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.connect", username));
                 break;
+
 
             case SEND_PACKS:
                 packsToSent.addAll(packet.getPackIds());
@@ -300,9 +306,18 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
     }
 
     // 修复点2: 增强空值安全处理
+    
     private boolean couldLoginUserByName(String bedrockUsername) {
+        // 修复点2: 增强空值安全处理
         if (session.getAuthData() == null) {
             geyser.getLogger().warning("尝试认证时 authData 为空: " + bedrockUsername);
+            return false;
+        }
+        
+        // 优先使用 XUID 进行认证
+        String xuid = session.getAuthData().xuid();
+        if (xuid == null) {
+            geyser.getLogger().warning("XUID 为空，无法进行认证");
             return false;
         }
         
