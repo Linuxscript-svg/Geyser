@@ -792,9 +792,13 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                     new GameProfile(mcProfile.getId(), mcProfile.getName()),
                     mcToken.getAccessToken()
             );
-            geyser.saveAuthChain(bedrockUsername(), GSON.toJson(step.toJson(response)));
-            return Boolean.TRUE;
-        }).whenComplete((successful, ex) -> {
+        // 安全获取用户名
+        String username = (authData != null && authData.name() != null) ? 
+            authData.name() : safePlayerIdentifier();
+        
+        geyser.saveAuthChain(username, GSON.toJson(step.toJson(response)));
+        return Boolean.TRUE;
+    }).whenComplete((successful, ex) -> {
             if (this.closed) {
                 return;
             }
@@ -856,6 +860,11 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         if (closed) {
             return false;
         }
+        
+    // 安全获取 XUID
+    String xuid = (authData != null && authData.xuid() != null) ? 
+        authData.xuid() : "unknown";
+    
         task.cleanup(); // player is online -> remove pending authentication immediately
         return task.getAuthentication().handle((result, ex) -> {
              if (ex != null) {
@@ -1131,15 +1140,17 @@ if (downstream instanceof LocalSession) {
         downstream.connect(false, loginEvent.transferring());
     }
 
-    public void disconnect(String reason) {
-        if (!closed) {
-            loggedIn = false;
+public void disconnect(String reason) {
+    if (!closed) {
+        loggedIn = false;
 
-            SessionDisconnectEvent disconnectEvent = new SessionDisconnectEvent(this, reason);
-            if (authData != null && clientData != null) { // can occur if player disconnects before Bedrock auth finishes
-                // Fire SessionDisconnectEvent
-                geyser.getEventBus().fire(disconnectEvent);
-            }
+        // 使用安全的玩家标识
+        String playerIdentifier = safePlayerIdentifier();
+        
+        SessionDisconnectEvent disconnectEvent = new SessionDisconnectEvent(this, reason);
+        if (authData != null && clientData != null) {
+            geyser.getEventBus().fire(disconnectEvent);
+        }
 
             // Disconnect downstream if necessary
             if (downstream != null) {
@@ -1161,13 +1172,15 @@ if (downstream instanceof LocalSession) {
 
             // Remove from session manager
             geyser.getSessionManager().removeSession(this);
-            if (authData != null) {
-                PendingMicrosoftAuthentication.AuthenticationTask task = geyser.getPendingMicrosoftAuthentication().getTask(authData.xuid());
-                if (task != null) {
-                    task.resetRunningFlow();
-                }
+         
+        // 修改点：安全访问 XUID
+        if (authData != null && authData.xuid() != null) {
+            PendingMicrosoftAuthentication.AuthenticationTask task = geyser.getPendingMicrosoftAuthentication().getTask(authData.xuid());
+            if (task != null) {
+                task.resetRunningFlow();
             }
         }
+    }
 
         if (tickThread != null) {
             tickThread.cancel(false);
@@ -1176,6 +1189,12 @@ if (downstream instanceof LocalSession) {
         erosionHandler.close();
 
         closed = true;
+        
+        
+    // 日志使用安全标识
+    String address = geyser.getConfig().isLogPlayerIpAddresses() ? 
+        upstream.getAddress().getAddress().toString() : "<IP address withheld>";
+    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.disconnect", playerIdentifier, reason));
     }
 
     /**
@@ -1984,7 +2003,8 @@ public @NonNull String bedrockUsername() {
     if (authData != null && authData.name() != null) {
         return authData.name();
     }
-    
+    return safePlayerIdentifier(); // 回退到安全标识
+}
     // 备选方案：使用 XUID 或客户端数据中的用户名
     if (authData != null && authData.xuid() != null) {
         return "XUID:" + authData.xuid();
