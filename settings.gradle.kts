@@ -19,7 +19,7 @@ rootProject.name = "geyser-parent"
 include(":ap")
 include(":api")
 include(":bungeecord")
-include(":fabric")
+//include(":fabric")
 include(":neoforge")
 include(":mod")
 include(":spigot")
