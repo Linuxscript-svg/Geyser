@@ -21,14 +21,14 @@ val basePlatforms = setOf(
 ).map { it.dependencyProject }
 
 val moddedPlatforms = setOf(
-    projects.fabric,
+//    projects.fabric,
     projects.neoforge,
     projects.mod
 ).map { it.dependencyProject }
 
 val modrinthPlatforms = setOf(
     projects.bungeecord,
-    projects.fabric,
+  //  projects.fabric,
     projects.neoforge,
     projects.spigot,
     projects.velocity
