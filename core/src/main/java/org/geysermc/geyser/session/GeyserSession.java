@@ -1735,13 +1735,36 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
      *
      * @param packet the java edition packet from MCProtocolLib
      */
+    public void sendDownstreamPacket(Packet packet, ProtocolState intendedState) {
+        // protocol can be null when we're not yet logged in (online auth)
+        if (protocol == null) {
+            if (geyser.getConfig().isDebugMode()) {
+                geyser.getLogger().debug("Tried to send downstream packet with no downstream session!");
+                Thread.dumpStack();
+            }
+            return;
+        }
+
+        if (protocol.getState() != intendedState) {
+            geyser.getLogger().debug("Tried to send " + packet.getClass().getSimpleName() + " packet while not in " + intendedState.name() + " state");
+            return;
+        }
+
+        sendDownstreamPacket(packet);
+    }
+
+    /**
+     * Send a packet to the remote server.
+     *
+     * @param packet the java edition packet from MCProtocolLib
+     */
     public void sendDownstreamPacket(Packet packet) {
         if (!closed && this.downstream != null) {
             Channel channel = this.downstream.getSession().getChannel();
             if (channel == null) {
                 // Channel is only null before the connection has initialized
                 geyser.getLogger().warning("Tried to send a packet to the Java server too early!");
-                if (geyser.getConfig().isDebug极简壁纸Mode()) {
+                if (geyser.getConfig().isDebugMode()) {
                     Thread.dumpStack();
                 }
                 return;
@@ -1982,32 +2005,32 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         };
     }
 
-    @Override
-    public @NonNull String bedrockUsername() {
-        if (authData != null && authData.name() != null) {
-            return authData.name();
-        }
-        
-        // Fallback to XUID or client data username
-        if (authData != null && authData.xuid() != null) {
-            return "XUID:" + authData.xuid();
-        }
-        
-        if (clientData != null && clientData.getUsername() != null) {
-            return clientData.getUsername();
-        }
-        
-        // Final fallback
-        return "UnknownPlayer";
+   @Override
+public @NonNull String bedrockUsername() {
+    if (authData != null && authData.name() != null) {
+        return authData.name();
     }
+    
+    // 备选方案：使用 XUID 或客户端数据中的用户名
+    if (authData != null && authData.xuid() != null) {
+        return "XUID:" + authData.xuid();
+    }
+    
+    if (clientData != null && clientData.getUsername() != null) {
+        return clientData.getUsername();
+    }
+    
+    // 最后备选
+    return "UnknownPlayer";
+}
 
-    @Override
-    public @MonotonicNonNull String javaUsername() {
-        if (playerEntity != null && playerEntity.getUsername() != null) {
-            return playerEntity.getUsername();
-        }
-        return bedrockUsername(); // Safe fallback
+   @Override
+public @MonotonicNonNull String javaUsername() {
+    if (playerEntity != null && playerEntity.getUsername() != null) {
+        return playerEntity.getUsername();
     }
+    return bedrockUsername(); // 回退到安全的 bedrockUsername
+}
 
     @Override
     public UUID javaUuid() {
@@ -2016,19 +2039,17 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
 
     @Override
     public @NonNull String xuid() {
-        return authData != null ? authData.xuid() : "";
+        return authData.xuid();
     }
 
     @Override
     public @NonNull String version() {
-        return clientData != null ? clientData.getGameVersion() : "Unknown";
+        return clientData.getGameVersion();
     }
 
     @Override
     public @NonNull BedrockPlatform platform() {
-        return clientData != null ? 
-            BedrockPlatform.values()[clientData.getDeviceOs().ordinal()] : 
-            BedrockPlatform.UNKNOWN;
+        return BedrockPlatform.values()[clientData.getDeviceOs().ordinal()]; //todo
     }
 
     @Override
@@ -2038,16 +2059,12 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
 
     @Override
     public @NonNull UiProfile uiProfile() {
-        return clientData != null ? 
-            UiProfile.values()[clientData.getUiProfile().ordinal()] : 
-            UiProfile.CLASSIC;
+        return UiProfile.values()[clientData.getUiProfile().ordinal()]; //todo
     }
 
     @Override
     public @NonNull InputMode inputMode() {
-        return clientData != null ? 
-            InputMode.values()[clientData.getCurrentInputMode().ordinal()] : 
-            InputMode.UNKNOWN;
+        return InputMode.values()[clientData.getCurrentInputMode().ordinal()]; //todo
     }
 
     @Override
@@ -2110,7 +2127,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     }
 
     @Override
-    public void shakeCamera(float intensity, float duration, @NonNull Camera极简壁纸Shake type) {
+    public void shakeCamera(float intensity, float duration, @NonNull CameraShake type) {
         this.cameraData.shakeCamera(intensity, duration, type);
     }
 
