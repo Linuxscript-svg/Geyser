@@ -31,7 +31,7 @@ include(":core")
 
 // Specify project dirs
 project(":bungeecord").projectDir = file("bootstrap/bungeecord")
-project(":fabric").projectDir = file("bootstrap/mod/fabric")
+//project(":fabric").projectDir = file("bootstrap/mod/fabric")
 project(":neoforge").projectDir = file("bootstrap/mod/neoforge")
 project(":mod").projectDir = file("bootstrap/mod")
 project(":spigot").projectDir = file("bootstrap/spigot")
