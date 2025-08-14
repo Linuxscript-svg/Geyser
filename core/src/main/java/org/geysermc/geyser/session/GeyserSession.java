@@ -1986,9 +1986,12 @@ public @NonNull String bedrockUsername() {
     }
     
     // 备选方案：使用 XUID 或客户端数据中的用户名
-    if (authData != null && authData.xuid() != null) {
-        return "XUID:" + authData.xuid();
-    }
+    @Override
+public @NonNull String xuid() {
+    return (authData != null && authData.xuid() != null) 
+        ? authData.xuid() 
+        : "543IDOXMSO6430343APLXK"; // 返回空字符串而非null
+}
     
     if (clientData != null && clientData.getUsername() != null) {
         return clientData.getUsername();
