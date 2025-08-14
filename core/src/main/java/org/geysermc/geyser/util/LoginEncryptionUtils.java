@@ -59,21 +59,6 @@ public class LoginEncryptionUtils {
 
     public static void encryptPlayerConnection(GeyserSession session, LoginPacket loginPacket) {
         encryptConnectionWithCert(session, loginPacket.getExtra(), loginPacket.getChain());
-                // 如果认证数据为空，创建临时数据
-        if (authData == null) {
-            // 生成随机用户名和 UUID
-            String randomName = "Player_" + UUID.randomUUID().toString().substring(0, 8);
-            UUID randomUuid = UUID.randomUUID();
-            
-            // 使用 XUID 如果存在，否则随机生成
-            String xuid = (session.xuid() != null) ? 
-                session.xuid() : "RND_" + UUID.randomUUID().toString().substring(0, 8);
-            
-            authData = new AuthData(randomName, randomUuid, xuid);
-            session.setAuthData(authData);
-            
-            geyser.getLogger().warning("创建临时认证数据: " + randomName);
-        }
     }
 
     private static void encryptConnectionWithCert(GeyserSession session, String clientData, List<String> certChainData) {
@@ -127,6 +112,7 @@ public class LoginEncryptionUtils {
             throw new RuntimeException("Unable to complete login", ex);
         }
     }
+
 
     private static void startEncryptionHandshake(GeyserSession session, PublicKey key) throws Exception {
         KeyPair serverKeyPair = EncryptionUtils.createKeyPair();
