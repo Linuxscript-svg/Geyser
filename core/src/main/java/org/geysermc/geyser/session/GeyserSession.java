@@ -1681,7 +1681,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     /**
      * Send a packet immediately to the player.
      *
-     * @极简壁纸
+     * @
      * @param packet the bedrock packet from the NukkitX protocol lib
      */
     public void sendUpstreamPacketImmediately(BedrockPacket packet) {
@@ -1698,7 +1698,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     }
 
     /**
-     * Send极简壁纸 a packet to the remote server if in the login state.
+     * Send a packet to the remote server if in the login state.
      *
      * @param packet the java edition packet from MCProtocolLib
      */
@@ -1711,29 +1711,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
      *
      * @param packet the java edition packet from MCProtocolLib
      * @param intendedState the state the client should be in
-     */
-    public void sendDownstreamPacket(Packet packet, ProtocolState intendedState) {
-        // protocol can be null when we're not yet logged in (online auth)
-        if (protocol == null) {
-            if (geyser.getConfig().isDebugMode()) {
-                geyser.getLogger().debug("Tried to send downstream packet with no downstream session!");
-                Thread.dumpStack();
-            }
-            return;
-        }
-
-        if (protocol.getState() != intendedState) {
-            geyser.getLogger().debug("Tried to send " + packet.getClass().getSimpleName() + " packet while not in " + intendedState.name() + " state");
-            return;
-        }
-
-        sendDownstreamPacket(packet);
-    }
-
-    /**
-     * Send a packet to the remote server.
-     *
-     * @param packet the java edition packet from MCProtocolLib
      */
     public void sendDownstreamPacket(Packet packet, ProtocolState intendedState) {
         // protocol can be null when we're not yet logged in (online auth)
@@ -2005,32 +1982,32 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         };
     }
 
-   @Override
-public @NonNull String bedrockUsername() {
-    if (authData != null && authData.name() != null) {
-        return authData.name();
+    @Override
+    public @NonNull String bedrockUsername() {
+        if (authData != null && authData.name() != null) {
+            return authData.name();
+        }
+        
+        // Fallback to XUID or client data username
+        if (authData != null && authData.xuid() != null) {
+            return "XUID:" + authData.xuid();
+        }
+        
+        if (clientData != null && clientData.getUsername() != null) {
+            return clientData.getUsername();
+        }
+        
+        // Final fallback
+        return "UnknownPlayer";
     }
-    
-    // 备选方案：使用 XUID 或客户端数据中的用户名
-    if (authData != null && authData.xuid() != null) {
-        return "XUID:" + authData.xuid();
-    }
-    
-    if (clientData != null && clientData.getUsername() != null) {
-        return clientData.getUsername();
-    }
-    
-    // 最后备选
-    return "UnknownPlayer";
-}
 
-   @Override
-public @MonotonicNonNull String javaUsername() {
-    if (playerEntity != null && playerEntity.getUsername() != null) {
-        return playerEntity.getUsername();
+    @Override
+    public @MonotonicNonNull String javaUsername() {
+        if (playerEntity != null && playerEntity.getUsername() != null) {
+            return playerEntity.getUsername();
+        }
+        return bedrockUsername(); // Safe fallback
     }
-    return bedrockUsername(); // 回退到安全的 bedrockUsername
-}
 
     @Override
     public UUID javaUuid() {
@@ -2039,17 +2016,19 @@ public @MonotonicNonNull String javaUsername() {
 
     @Override
     public @NonNull String xuid() {
-        return authData.xuid();
+        return authData != null ? authData.xuid() : "";
     }
 
     @Override
     public @NonNull String version() {
-        return clientData.getGameVersion();
+        return clientData != null ? clientData.getGameVersion() : "Unknown";
     }
 
     @Override
     public @NonNull BedrockPlatform platform() {
-        return BedrockPlatform.values()[clientData.getDeviceOs().ordinal()]; //todo
+        return clientData != null ? 
+            BedrockPlatform.values()[clientData.getDeviceOs().ordinal()] : 
+            BedrockPlatform.UNKNOWN;
     }
 
     @Override
@@ -2059,12 +2038,16 @@ public @MonotonicNonNull String javaUsername() {
 
     @Override
     public @NonNull UiProfile uiProfile() {
-        return UiProfile.values()[clientData.getUiProfile().ordinal()]; //todo
+        return clientData != null ? 
+            UiProfile.values()[clientData.getUiProfile().ordinal()] : 
+            UiProfile.CLASSIC;
     }
 
     @Override
     public @NonNull InputMode inputMode() {
-        return InputMode.values()[clientData.getCurrentInputMode().ordinal()]; //todo
+        return clientData != null ? 
+            InputMode.values()[clientData.getCurrentInputMode().ordinal()] : 
+            InputMode.UNKNOWN;
     }
 
     @Override
