@@ -37,7 +37,7 @@ subprojects {
 
     when (this) {
         in basePlatforms -> plugins.apply("geyser.platform-conventions")
-        in moddedPlatforms -> plugins.apply("geyser.modded-conventions")
+      //  in moddedPlatforms -> plugins.apply("geyser.modded-conventions")
         else -> plugins.apply("geyser.base-conventions")
     }
 
