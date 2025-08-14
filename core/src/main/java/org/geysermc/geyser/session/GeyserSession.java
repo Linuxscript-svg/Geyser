@@ -1020,21 +1020,23 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 loggedIn = true;
 
                 if (downstream instanceof LocalSession) {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
-                        bedrockUsername(), protocol.getProfile().getName())); // 使用 bedrockUsername()
-            } else {
-                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
-                        bedrockUsername(), protocol.getProfile().getName(), remoteServer.address())); // 使用 bedrockUsername()
-            }
+                    // Connected directly to the server
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
+                            authData.name(), protocol.getProfile().getName()));
+                } else {
+                    // Connected to an IP address
+                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
+                            authData.name(), protocol.getProfile().getName(), remoteServer.address()));
+                }
 
                 UUID uuid = protocol.getProfile().getId();
                 if (uuid == null) {
                     // Set what our UUID *probably* is going to be
-                    if (remoteServer.authType() == AuthType.FLOODGATE) {
-                        uuid = new UUID(0, Long.parseLong(authData.xuid()));
-                    } else {
-                        uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + protocol.getProfile().getName()).getBytes(StandardCharsets.UTF_8));
-                    }
+                    uuid = authData.uuid();
+                }
+
+                if (uuid.toString().equals("00000000-0000-4000-8000-000000000000")) {
+                    geyser.getLogger().warning("玩家: " + protocol.getProfile().getName() + " 登录异常，UUID 为空。authData.uuid: " + authData.uuid() + " XUid: " + authData.xuid());
                 }
                 playerEntity.setUuid(uuid);
                 playerEntity.setUsername(protocol.getProfile().getName());
@@ -1051,6 +1053,8 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 // Download and load the language for the player
                 MinecraftLocale.downloadAndLoadLocale(locale);
             }
+
+
 
             @Override
             public void disconnected(DisconnectedEvent event) {
@@ -1984,22 +1988,12 @@ public @NonNull String bedrockUsername() {
     if (authData != null && authData.name() != null) {
         return authData.name();
     }
-    
-    // 备选方案：使用 XUID 或客户端数据中的用户名
+}
+
     @Override
-public @NonNull String xuid() {
-    return (authData != null && authData.xuid() != null) 
-        ? authData.xuid() 
-        : "543IDOXMSO6430343APLXK"; // 返回空字符串而非null
-}
-    
-    if (clientData != null && clientData.getUsername() != null) {
-        return clientData.getUsername();
+    public String xuid() {
+        return authData.xuid();
     }
-    
-    // 最后备选
-    return "UnknownPlayer";
-}
 
    @Override
 public @MonotonicNonNull String javaUsername() {
