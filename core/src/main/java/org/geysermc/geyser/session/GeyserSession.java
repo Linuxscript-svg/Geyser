@@ -1020,12 +1020,12 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 loggedIn = true;
 
                 if (downstream instanceof LocalSession) {
-                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
-                            bedrockUsername(), protocol.getProfile().getName()));
-                } else {
-                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
-                            bedrockUsername(), protocol.getProfile().getName(), remoteServer.address()));
-                }
+                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
+                        bedrockUsername(), protocol.getProfile().getName())); // 使用 bedrockUsername()
+            } else {
+                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
+                        bedrockUsername(), protocol.getProfile().getName(), remoteServer.address())); // 使用 bedrockUsername()
+            }
 
                 UUID uuid = protocol.getProfile().getId();
                 if (uuid == null) {
@@ -1082,21 +1082,18 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
                 } else {
                     disconnectMessage = MessageTranslator.convertMessage(event.getReason());
                 }
-                
-                String bedrockName = bedrockUsername();
-                if (downstream instanceof LocalSession) {
-                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
-                            bedrockName, bedrockName));
-                } else {
-                    geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
-                            bedrockName, bedrockName, remoteServer.address()));
-                }
-                
+if (downstream instanceof LocalSession) {
+                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect_internal",
+                        bedrockUsername(), protocol.getProfile().getName())); // 使用 bedrockUsername()
+            } else {
+                geyser.getLogger().info(GeyserLocale.getLocaleStringLog("geyser.network.remote.connect",
+                        bedrockUsername(), protocol.getProfile().getName(), remoteServer.address())); // 使用 bedrockUsername()
+            }
                 if (cause != null) {
                     if (cause.getMessage() != null) {
-                        geyser.getLogger().error("[" + bedrockName + "] " + cause.getMessage());
+                        GeyserImpl.getInstance().getLogger().error(cause.getMessage());
                     } else {
-                        geyser.getLogger().error("[" + bedrockName + "] An exception occurred", cause);
+                        GeyserImpl.getInstance().getLogger().error("An exception occurred: ", cause);
                     }
                     if (geyser.getConfig().isDebugMode()) {
                         cause.printStackTrace();
@@ -1443,10 +1440,11 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         sendDownstreamGamePacket(swapHandsPacket);
     }
 
-    @Override
-    public String name() {
-        return javaUsername();
-    }
+   @Override
+public String name() {
+    // 优先使用 javaUsername()，它内部已处理空值
+    return playerEntity != null ? javaUsername() : bedrockUsername();
+}
 
     @Override
     public void sendMessage(@NonNull String message) {
@@ -1681,7 +1679,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     /**
      * Send a packet immediately to the player.
      *
-     * @
      * @param packet the bedrock packet from the NukkitX protocol lib
      */
     public void sendUpstreamPacketImmediately(BedrockPacket packet) {
@@ -1982,32 +1979,32 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         };
     }
 
-    @Override
-    public @NonNull String bedrockUsername() {
-        if (authData != null && authData.name() != null) {
-            return authData.name();
-        }
-        
-        // Fallback to XUID or client data username
-        if (authData != null && authData.xuid() != null) {
-            return "XUID:" + authData.xuid();
-        }
-        
-        if (clientData != null && clientData.getUsername() != null) {
-            return clientData.getUsername();
-        }
-        
-        // Final fallback
-        return "UnknownPlayer";
+   @Override
+public @NonNull String bedrockUsername() {
+    if (authData != null && authData.name() != null) {
+        return authData.name();
     }
+    
+    // 备选方案：使用 XUID 或客户端数据中的用户名
+    if (authData != null && authData.xuid() != null) {
+        return "XUID:" + authData.xuid();
+    }
+    
+    if (clientData != null && clientData.getUsername() != null) {
+        return clientData.getUsername();
+    }
+    
+    // 最后备选
+    return "UnknownPlayer";
+}
 
-    @Override
-    public @MonotonicNonNull String javaUsername() {
-        if (playerEntity != null && playerEntity.getUsername() != null) {
-            return playerEntity.getUsername();
-        }
-        return bedrockUsername(); // Safe fallback
+   @Override
+public @MonotonicNonNull String javaUsername() {
+    if (playerEntity != null && playerEntity.getUsername() != null) {
+        return playerEntity.getUsername();
     }
+    return bedrockUsername(); // 回退到安全的 bedrockUsername
+}
 
     @Override
     public UUID javaUuid() {
@@ -2016,19 +2013,17 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
 
     @Override
     public @NonNull String xuid() {
-        return authData != null ? authData.xuid() : "";
+        return authData.xuid();
     }
 
     @Override
     public @NonNull String version() {
-        return clientData != null ? clientData.getGameVersion() : "Unknown";
+        return clientData.getGameVersion();
     }
 
     @Override
     public @NonNull BedrockPlatform platform() {
-        return clientData != null ? 
-            BedrockPlatform.values()[clientData.getDeviceOs().ordinal()] : 
-            BedrockPlatform.UNKNOWN;
+        return BedrockPlatform.values()[clientData.getDeviceOs().ordinal()]; //todo
     }
 
     @Override
@@ -2038,16 +2033,12 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
 
     @Override
     public @NonNull UiProfile uiProfile() {
-        return clientData != null ? 
-            UiProfile.values()[clientData.getUiProfile().ordinal()] : 
-            UiProfile.CLASSIC;
+        return UiProfile.values()[clientData.getUiProfile().ordinal()]; //todo
     }
 
     @Override
     public @NonNull InputMode inputMode() {
-        return clientData != null ? 
-            InputMode.values()[clientData.getCurrentInputMode().ordinal()] : 
-            InputMode.UNKNOWN;
+        return InputMode.values()[clientData.getCurrentInputMode().ordinal()]; //todo
     }
 
     @Override
