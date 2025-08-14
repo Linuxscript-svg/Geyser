@@ -20,12 +20,6 @@ val basePlatforms = setOf(
     projects.viaproxy
 ).map { it.dependencyProject }
 
-val moddedPlatforms = setOf(
-//    projects.fabric,
-   projects.neoforge,
-//    projects.mod
-).map { it.dependencyProject }
-
 val modrinthPlatforms = setOf(
     projects.bungeecord,
   //  projects.fabric,
